@@ -1,0 +1,13 @@
+services:
+  it-asset-tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: it-asset-tracker-app
+    ports:
+      - "8081:8081"
+    environment:
+      DB_URL: jdbc:postgresql://host.docker.internal:5432/asset_tracker
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in your .env file}
+    restart: unless-stopped
