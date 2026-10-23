@@ -6,6 +6,8 @@ import com.project.it_asset_tracker.entity.Asset;
 import com.project.it_asset_tracker.entity.AssetStatus;
 import com.project.it_asset_tracker.entity.Category;
 import com.project.it_asset_tracker.entity.User;
+import com.project.it_asset_tracker.exception.BadRequestException;
+import com.project.it_asset_tracker.exception.ResourceNotFoundException;
 import com.project.it_asset_tracker.repository.AssetRepository;
 import com.project.it_asset_tracker.repository.CategoryRepository;
 import com.project.it_asset_tracker.repository.UserRepository;
@@ -39,6 +41,14 @@ public class AssetService {
     }
 
     @Transactional(readOnly = true)
+    public List<AssetDTO> getAllAssets(AssetStatus status) {
+        if (status == null) {
+            return getAllAssets();
+        }
+        return getAssetsByStatus(status);
+    }
+
+    @Transactional(readOnly = true)
     public AssetDTO getAssetById(Long id) {
         return toDTO(findAsset(id));
     }
@@ -49,38 +59,29 @@ public class AssetService {
 
         if (assetRepository.existsBySerialNumber(serialNumber)) {
             throw new IllegalArgumentException(
-                    "Serial number already exists"
-            );
+                    "Serial number already exists");
         }
 
         Category category = categoryRepository.findById(request.getCategoryId())
                 .orElseThrow(() ->
-                        new IllegalArgumentException("Category not found"));
+                        new ResourceNotFoundException("Category not found"));
+
+        if (request.getAssignedToUserId() != null) {
+            throw new BadRequestException(
+                    "Create the asset as available, then assign it using the assign endpoint");
+        }
+
+        if (request.getStatus() != null
+                && request.getStatus() != AssetStatus.AVAILABLE) {
+            throw new BadRequestException(
+                    "New assets must have AVAILABLE status");
+        }
 
         Asset asset = new Asset();
         asset.setName(request.getName().trim());
         asset.setSerialNumber(serialNumber);
         asset.setCategory(category);
-
-        if (request.getAssignedToUserId() != null) {
-            User user = userRepository.findById(request.getAssignedToUserId())
-                    .orElseThrow(() ->
-                            new IllegalArgumentException("Assigned user not found"));
-
-            asset.setAssignedTo(user);
-        }
-
-        AssetStatus status = request.getStatus();
-
-        if (status == null) {
-            status = request.getAssignedToUserId() == null
-                    ? AssetStatus.AVAILABLE
-                    : AssetStatus.ASSIGNED;
-        }
-
-        validateStatusAndAssignment(status, request.getAssignedToUserId());
-
-        asset.setStatus(status);
+        asset.setStatus(AssetStatus.AVAILABLE);
 
         return toDTO(assetRepository.save(asset));
     }
@@ -96,42 +97,66 @@ public class AssetService {
 
         if (serialUsedByAnotherAsset) {
             throw new IllegalArgumentException(
-                    "Serial number already exists"
-            );
+                    "Serial number already exists");
         }
 
         Category category = categoryRepository.findById(request.getCategoryId())
                 .orElseThrow(() ->
-                        new IllegalArgumentException("Category not found"));
+                        new ResourceNotFoundException("Category not found"));
+
+        if (request.getAssignedToUserId() != null
+                && !request.getAssignedToUserId().equals(
+                        asset.getAssignedTo() == null
+                                ? null : asset.getAssignedTo().getId())) {
+            throw new BadRequestException(
+                    "Use the assign endpoint to change asset assignment");
+        }
+
+        if (request.getStatus() != null
+                && request.getStatus() != asset.getStatus()) {
+            throw new BadRequestException(
+                    "Use the assign or return endpoint to change asset status");
+        }
 
         asset.setName(request.getName().trim());
         asset.setSerialNumber(serialNumber);
         asset.setCategory(category);
 
-        User assignedUser = null;
+        return toDTO(assetRepository.save(asset));
+    }
 
-        if (request.getAssignedToUserId() != null) {
-            assignedUser = userRepository.findById(request.getAssignedToUserId())
-                    .orElseThrow(() ->
-                            new IllegalArgumentException("Assigned user not found"));
+    @Transactional
+    public AssetDTO assignAsset(Long assetId, Long userId) {
+        Asset asset = findAsset(assetId);
+
+        if (asset.getStatus() != AssetStatus.AVAILABLE
+                || asset.getAssignedTo() != null) {
+            throw new BadRequestException(
+                    "Only available, unassigned assets can be assigned");
         }
 
-        asset.setAssignedTo(assignedUser);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("User not found"));
 
-        AssetStatus status = request.getStatus();
+        asset.setAssignedTo(user);
+        asset.setStatus(AssetStatus.ASSIGNED);
 
-        if (status == null) {
-            status = assignedUser == null
-                    ? AssetStatus.AVAILABLE
-                    : AssetStatus.ASSIGNED;
+        return toDTO(assetRepository.save(asset));
+    }
+
+    @Transactional
+    public AssetDTO returnAsset(Long assetId) {
+        Asset asset = findAsset(assetId);
+
+        if (asset.getStatus() != AssetStatus.ASSIGNED
+                || asset.getAssignedTo() == null) {
+            throw new BadRequestException(
+                    "Only assigned assets can be returned");
         }
 
-        validateStatusAndAssignment(
-                status,
-                request.getAssignedToUserId()
-        );
-
-        asset.setStatus(status);
+        asset.setAssignedTo(null);
+        asset.setStatus(AssetStatus.AVAILABLE);
 
         return toDTO(assetRepository.save(asset));
     }
@@ -161,42 +186,21 @@ public class AssetService {
     private Asset findAsset(Long id) {
         return assetRepository.findById(id)
                 .orElseThrow(() ->
-                        new IllegalArgumentException("Asset not found"));
-    }
-
-    private void validateStatusAndAssignment(
-            AssetStatus status,
-            Long assignedToUserId) {
-
-        if (status == AssetStatus.ASSIGNED && assignedToUserId == null) {
-            throw new IllegalArgumentException(
-                    "An assigned asset must have an assigned user"
-            );
-        }
-
-        if (status == AssetStatus.AVAILABLE && assignedToUserId != null) {
-            throw new IllegalArgumentException(
-                    "An available asset cannot have an assigned user"
-            );
-        }
+                        new ResourceNotFoundException("Asset not found"));
     }
 
     private AssetDTO toDTO(Asset asset) {
         Long categoryId = asset.getCategory() != null
-                ? asset.getCategory().getId()
-                : null;
+                ? asset.getCategory().getId() : null;
 
         String categoryName = asset.getCategory() != null
-                ? asset.getCategory().getName()
-                : null;
+                ? asset.getCategory().getName() : null;
 
         Long assignedToUserId = asset.getAssignedTo() != null
-                ? asset.getAssignedTo().getId()
-                : null;
+                ? asset.getAssignedTo().getId() : null;
 
         String assignedToUsername = asset.getAssignedTo() != null
-                ? asset.getAssignedTo().getUsername()
-                : null;
+                ? asset.getAssignedTo().getUsername() : null;
 
         return new AssetDTO(
                 asset.getId(),
