@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:16
+    container_name: postgres-db
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in your .env file}
+      POSTGRES_DB: mydatabase
+    ports:
+      - "5432:5432"
+    volumes:
+      - existing_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   it-asset-tracker:
     build:
       context: .
@@ -7,7 +25,15 @@ services:
     ports:
       - "8081:8081"
     environment:
-      DB_URL: jdbc:postgresql://host.docker.internal:5432/asset_tracker
+      DB_URL: jdbc:postgresql://postgres:5432/asset_tracker
       DB_USERNAME: ${DB_USERNAME:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in your .env file}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  existing_postgres_data:
+    external: true
+    name: a9c46a604769a4ff37fe7455251351068e349fad493f77334415a2f7f14c3ef5
